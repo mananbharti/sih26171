@@ -328,49 +328,73 @@ async function fillTextArea(textarea: HTMLTextAreaElement, value: string, signal
 // ─── Dropdown filling ───────────────────────
 
 async function fillDropdown(listbox: HTMLElement, value: string, options: string[], signal?: AbortSignal) {
-  // Google Forms dropdowns: click to open, then click the matching option
-
-  // First, try clicking the dropdown trigger
-  const trigger = listbox.closest('[role="listbox"]') ||
-    listbox.querySelector('[role="option"]')?.parentElement ||
+  // Google Forms dropdown trigger
+  const trigger = listbox.getAttribute('role') === 'listbox' ? listbox :
+    listbox.closest('[role="listbox"]') ||
+    listbox.querySelector<HTMLElement>('[role="option"]')?.parentElement ||
     listbox;
 
-  // Click to open
+  // Click to open dropdown menu
   (trigger as HTMLElement).click();
-  await sleep(300);
+  await sleep(450);
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-  // Find matching option — try exact match first, then fuzzy
-  const allOptions = document.querySelectorAll<HTMLElement>('[role="option"], [data-value]');
+  // Query options — Google Forms populates options in [role="option"], [data-value], .exportOption, or .M2User
+  const allOptions = Array.from(document.querySelectorAll<HTMLElement>('[role="option"], [data-value], .exportOption, .M2User, .vRMGwf'));
+  
   let best: HTMLElement | null = null;
   let bestScore = 0;
-  const valueLower = value.toLowerCase();
+  const valueLower = value.toLowerCase().trim();
+  const valueWords = valueLower.split(/\s+/).filter(w => w.length > 0);
 
   for (const opt of allOptions) {
-    const text = (opt.textContent || opt.getAttribute('data-value') || '').trim().toLowerCase();
-    if (!text || text === 'choose' || text === 'select') continue;
+    const textAttr = opt.getAttribute('data-value') || opt.getAttribute('aria-label') || '';
+    const textContent = opt.textContent || opt.innerText || '';
+    const fullText = (textAttr + ' ' + textContent).trim().toLowerCase();
 
-    if (text === valueLower) {
+    if (!fullText || fullText === 'choose' || fullText === 'select') continue;
+
+    // Exact match
+    if (fullText === valueLower || textContent.trim().toLowerCase() === valueLower || textAttr.trim().toLowerCase() === valueLower) {
       best = opt;
       bestScore = 100;
       break;
     }
 
-    // Fuzzy: check if value contains option text or vice versa
-    if (text.includes(valueLower) || valueLower.includes(text)) {
-      const score = Math.min(text.length, valueLower.length) / Math.max(text.length, valueLower.length) * 80;
+    // Includes match
+    if (fullText.includes(valueLower) || valueLower.includes(fullText)) {
+      const score = (Math.min(fullText.length, valueLower.length) / Math.max(fullText.length, valueLower.length)) * 85;
       if (score > bestScore) {
         best = opt;
         bestScore = score;
       }
     }
+
+    // Number / Ordinal match for years: e.g. "1st" or "1" matching "1st Year"
+    if (valueLower.includes('1st') || valueLower.includes('first') || valueLower.startsWith('1')) {
+      if (fullText.includes('1st') || fullText.includes('first') || fullText.includes('1')) {
+        if (90 > bestScore) {
+          best = opt;
+          bestScore = 90;
+        }
+      }
+    }
+
+    // Keyword match (e.g. "frontend" in "Frontend Intern")
+    if (valueWords.length > 0 && valueWords.every(w => fullText.includes(w))) {
+      if (80 > bestScore) {
+        best = opt;
+        bestScore = 80;
+      }
+    }
   }
 
   if (best) {
-    best.click();
-    await sleep(150);
+    const target = best.closest('[role="option"], [data-value]') as HTMLElement || best;
+    target.click();
+    await sleep(200);
   } else {
-    // Try clicking away to close
+    // Try clicking document body to dismiss open dropdown if unselected
     document.body.click();
     console.warn(`[ORVIA] No matching dropdown option for value: ${value}`);
   }
@@ -379,38 +403,60 @@ async function fillDropdown(listbox: HTMLElement, value: string, options: string
 // ─── Radio filling ──────────────────────────
 
 async function fillRadio(group: HTMLElement, value: string, options: string[], signal?: AbortSignal) {
-  const valueLower = value.toLowerCase();
+  const valueLower = value.toLowerCase().trim();
+  const valueWords = valueLower.split(/\s+/).filter(w => w.length > 0);
 
-  // Find all radio options
-  const radios = group.querySelectorAll<HTMLElement>('[role="radio"], label');
+  // Find all radio elements or option containers inside group
+  const radioItems = Array.from(group.querySelectorAll<HTMLElement>('[role="radio"], .docssharedWizToggleLabeledContainer, label, [data-value]'));
+  
   let best: HTMLElement | null = null;
   let bestScore = 0;
 
-  for (const radio of radios) {
-    const labelEl = radio.querySelector<HTMLElement>('.vRMGwf, .docssharedWizToggleLabeledLabelText, span') || radio;
-    const text = (labelEl.textContent || '').trim().toLowerCase();
-    if (!text) continue;
+  for (const item of radioItems) {
+    const ariaLabel = item.getAttribute('aria-label') || item.getAttribute('data-value') || '';
+    const container = item.closest('.docssharedWizToggleLabeledContainer, [role="radio"]') || item;
+    const textContent = container.textContent || '';
+    const fullText = (ariaLabel + ' ' + textContent).trim().toLowerCase();
 
-    if (text === valueLower) {
-      best = radio;
+    if (!fullText) continue;
+
+    if (fullText === valueLower || ariaLabel.trim().toLowerCase() === valueLower) {
+      best = item;
       bestScore = 100;
       break;
     }
 
-    if (text.includes(valueLower) || valueLower.includes(text)) {
-      const score = Math.min(text.length, valueLower.length) / Math.max(text.length, valueLower.length) * 80;
+    if (fullText.includes(valueLower) || valueLower.includes(fullText)) {
+      const score = (Math.min(fullText.length, valueLower.length) / Math.max(fullText.length, valueLower.length)) * 85;
       if (score > bestScore) {
-        best = radio;
+        best = item;
         bestScore = score;
+      }
+    }
+
+    // Number / Ordinal match for years: e.g. "1st" or "1" matching "1st Year"
+    if (valueLower.includes('1st') || valueLower.includes('first') || valueLower.startsWith('1')) {
+      if (fullText.includes('1st') || fullText.includes('first') || fullText.includes('1')) {
+        if (90 > bestScore) {
+          best = item;
+          bestScore = 90;
+        }
+      }
+    }
+
+    // Keyword match (e.g. "frontend" in "Frontend Intern")
+    if (valueWords.length > 0 && valueWords.every(w => fullText.includes(w))) {
+      if (80 > bestScore) {
+        best = item;
+        bestScore = 80;
       }
     }
   }
 
   if (best) {
-    // Click the radio or its container
-    const clickTarget = best.querySelector<HTMLElement>('[role="radio"]') || best;
+    const clickTarget = best.getAttribute('role') === 'radio' ? best : best.querySelector<HTMLElement>('[role="radio"]') || best;
     clickTarget.click();
-    await sleep(100);
+    await sleep(150);
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   } else {
     console.warn(`[ORVIA] No matching radio option for value: ${value}`);
